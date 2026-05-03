@@ -6,51 +6,52 @@ import java.util.*;
 public class VMSchedulerComparison {
 
     public static void main(String[] args) {
-        System.out.println("========== VM Scheduling Comparison ==========\n");
+        System.out.println("===== REALISTIC VM SCHEDULING COMPARISON =====");
 
-        // Run SpaceShared simulation
         runSimulation("SpaceShared", new CloudletSchedulerSpaceShared());
-
-        // Run TimeShared simulation
         runSimulation("TimeShared", new CloudletSchedulerTimeShared());
     }
 
     private static void runSimulation(String title, CloudletScheduler scheduler) {
         try {
-            System.out.println("\n===== Running " + title + " Simulation =====");
+            System.out.println("\n=== " + title + " ===");
 
-            int numUser = 1;
-            Calendar calendar = Calendar.getInstance();
-            CloudSim.init(numUser, calendar, false);
+            CloudSim.init(1, Calendar.getInstance(), false);
 
-            Datacenter datacenter0 = createDatacenter("Datacenter_0");
+            Datacenter datacenter = createDatacenter("Datacenter_0");
             DatacenterBroker broker = new DatacenterBroker("Broker");
 
-            // Create VM with selected scheduler
-            Vm vm = new Vm(0, broker.getId(), 1000, 1, 512,
-                    1000, 10000, "Xen", scheduler);
+            int brokerId = broker.getId();
 
-            List<Vm> vmlist = new ArrayList<>();
-            vmlist.add(vm);
+            // 🔹 Create multiple VMs (heterogeneous)
+            List<Vm> vmList = new ArrayList<>();
 
-            // Create Cloudlets
+            vmList.add(new Vm(0, brokerId, 500, 1, 512, 1000, 10000, "Xen", scheduler));
+            vmList.add(new Vm(1, brokerId, 1000, 1, 1024, 1000, 10000, "Xen", scheduler));
+            vmList.add(new Vm(2, brokerId, 2000, 2, 2048, 2000, 20000, "Xen", scheduler));
+
+            broker.submitVmList(vmList);
+
+            // 🔹 Create realistic workload (10 cloudlets)
             List<Cloudlet> cloudletList = new ArrayList<>();
-            long length = 40000;
-            long fileSize = 300;
-            long outputSize = 300;
+            UtilizationModel model = new UtilizationModelFull();
 
-            UtilizationModel utilizationModel = new UtilizationModelFull();
+            long[] lengths = {20000, 40000, 10000, 30000, 50000, 25000, 35000, 15000, 45000, 20000};
 
-            for (int i = 0; i < 2; i++) {
-                Cloudlet cloudlet = new Cloudlet(i, length, 1,
-                        fileSize, outputSize,
-                        utilizationModel, utilizationModel, utilizationModel);
+            for (int i = 0; i < lengths.length; i++) {
+                Cloudlet cloudlet = new Cloudlet(
+                        i,
+                        lengths[i],
+                        1,
+                        300,
+                        300,
+                        model, model, model
+                );
 
-                cloudlet.setUserId(broker.getId());
+                cloudlet.setUserId(brokerId);
                 cloudletList.add(cloudlet);
             }
 
-            broker.submitVmList(vmlist);
             broker.submitCloudletList(cloudletList);
 
             CloudSim.startSimulation();
@@ -66,62 +67,77 @@ public class VMSchedulerComparison {
         }
     }
 
+    // 🔹 More realistic datacenter (multiple hosts)
     private static Datacenter createDatacenter(String name) {
-        List<Pe> peList = new ArrayList<>();
-        peList.add(new Pe(0, new PeProvisionerSimple(1000)));
 
         List<Host> hostList = new ArrayList<>();
-        hostList.add(new Host(
-                0,
-                new RamProvisionerSimple(2048),
-                new BwProvisionerSimple(10000),
-                1000000,
-                peList,
-                new VmSchedulerTimeShared(peList) // Host-level scheduling
-        ));
 
-        String arch = "x86";
-        String os = "Linux";
-        String vmm = "Xen";
+        for (int i = 0; i < 3; i++) {
+            List<Pe> peList = new ArrayList<>();
+
+            // Each host has 2 CPUs
+            peList.add(new Pe(0, new PeProvisionerSimple(1000)));
+            peList.add(new Pe(1, new PeProvisionerSimple(1000)));
+
+            hostList.add(new Host(
+                    i,
+                    new RamProvisionerSimple(4096),
+                    new BwProvisionerSimple(10000),
+                    1000000,
+                    peList,
+                    new VmSchedulerTimeShared(peList)
+            ));
+        }
 
         DatacenterCharacteristics characteristics =
                 new DatacenterCharacteristics(
-                        arch, os, vmm, hostList,
+                        "x86", "Linux", "Xen",
+                        hostList,
                         3.0, 0.0, 0.01, 0.02, 0.05
                 );
 
         try {
-            return new Datacenter(name, characteristics,
+            return new Datacenter(
+                    name,
+                    characteristics,
                     new VmAllocationPolicySimple(hostList),
-                    new LinkedList<>(), 0);
+                    new LinkedList<>(),
+                    0
+            );
         } catch (Exception e) {
             return null;
         }
     }
 
     private static void printResults(String title, List<Cloudlet> list) {
-        System.out.println("\n--- Results for " + title + " ---");
-        System.out.println("Cloudlet ID | Status | Time | Start | Finish");
+        System.out.println("\nResults (" + title + ")");
+        System.out.println("ID | Time | Start | Finish | Waiting");
 
-        double totalTime = 0;
+        double totalWaiting = 0;
         double makespan = 0;
 
         for (Cloudlet c : list) {
-            double time = c.getActualCPUTime();
+            double waiting = c.getExecStartTime();
             double finish = c.getFinishTime();
 
-            totalTime += time;
+            totalWaiting += waiting;
             makespan = Math.max(makespan, finish);
 
             System.out.println(
-                    c.getCloudletId() + " | SUCCESS | " +
-                            time + " | " +
+                    c.getCloudletId() + " | " +
+                            c.getActualCPUTime() + " | " +
                             c.getExecStartTime() + " | " +
-                            finish
+                            finish + " | " +
+                            waiting
             );
         }
 
-        System.out.println("\nTotal Execution Time: " + totalTime);
-        System.out.println("Makespan (Total Finish Time): " + makespan);
+        double avgWaiting = totalWaiting / list.size();
+        double throughput = list.size() / makespan;
+
+        System.out.println("\n📊 Metrics:");
+        System.out.println("Makespan: " + makespan);
+        System.out.println("Average Waiting Time: " + avgWaiting);
+        System.out.println("Throughput (tasks/sec): " + throughput);
     }
 }
